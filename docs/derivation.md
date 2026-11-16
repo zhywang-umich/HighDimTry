@@ -30,7 +30,7 @@ $$
 \mathcal L(\alpha,b,t)=\frac1n\sum_{j=1}^n w_j\,l\{Y_j,\,b+(K_t\alpha)_j\}+\gamma_1\alpha^\top K_t\alpha+\gamma_2\sum_m t_m,\qquad 0\le t_m\le U .
 $$
 
-L2 损失 $l(y,f)=(y-f)^2$，指数损失 $l(y,f)=e^{-yf}$。原论文核的公开 MATLAB 代码用的是普通 $\ell_1$（$[0,M]$ 上截断到 $M$），本实现与之一致；论文正文中的截断惩罚 $\lambda_m I(\lambda_m<M/2)$ 在 `tpk_fit(..., truncated)` 中未使用。
+L2 损失 $l(y,f)=(y-f)^2$，指数损失 $l(y,f)=e^{-yf}$。原论文核的公开 MATLAB 代码用的是普通 $\ell_1$（$[0,M]$ 上截断到 $M$），本实现与之一致；论文正文中的截断惩罚 $\lambda_m I(\lambda_m<M/2)$ 本实现未采用。
 
 ## 2. 坐标子问题的显式表达式
 
