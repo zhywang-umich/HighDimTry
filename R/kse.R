@@ -105,8 +105,12 @@ kse_add_par <- function(par, k, gate, rho0 = 0.5, u0 = 0) {
 }
 
 ## forward path.  Returns the list of models visited (S, par, value).
+## pair step (pairs = TRUE): when the best single coordinate does not pass the EBIC(xi_stop)
+## penalty, coordinates are ranked by the variance-heterogeneity statistic v' G_m v,
+## v = e^2 - mean(e^2) (e = current residual), and all pairs among the top `n_pair` are fitted
+## jointly; the best pair is added if it improves -2 l_R by more than two penalties.
 kse_path <- function(X, y, gate = TRUE, Gm = NULL, sig = NULL, n_cand = 5, max_size = 15,
-                     xi_stop = 0, patience = 2, verbose = FALSE) {
+                     xi_stop = 0, patience = 2, pairs = TRUE, n_pair = 8, verbose = FALSE) {
   n <- nrow(X); p <- ncol(X)
   if (is.null(sig)) sig <- tpk_bandwidth(X, "coord")
   if (is.null(Gm)) Gm <- tpk_bank(X, sig)
@@ -134,6 +138,29 @@ kse_path <- function(X, y, gate = TRUE, Gm = NULL, sig = NULL, n_cand = 5, max_s
         best <- list(m = m, par = fit$par, value = fit$value, Dt = Dt2)
     }
     if (is.null(best)) break
+    if (pairs && cur$value - best$value < kpen && length(S) + 2 <= max_size) {
+      e <- cur$alpha
+      v <- e^2 - mean(e^2)
+      hs <- drop(crossprod(Gm, as.vector(tcrossprod(v))))
+      hs[S] <- -Inf
+      top <- order(-hs)[seq_len(min(n_pair, p - k))]
+      bp <- NULL
+      for (i1 in seq_along(top)) for (i2 in seq_along(top)) {
+        if (i2 <= i1) next
+        m1 <- top[i1]; m2 <- top[i2]
+        S2 <- c(S, m1, m2)
+        Dt2 <- c(Dt, list(kse_Dt(X[, m1], s = sig[m1]), kse_Dt(X[, m2], s = sig[m2])))
+        par2 <- kse_add_par(kse_add_par(par, k, gate), k + 1, gate)
+        free <- c(1, if (gate) 1 + k + 1:2, 1 + gate * (k + 2) + k + 1:2)
+        fit <- tryCatch(kse_optim(par2, free, S2, Dt2, y, gate, maxit = 60), error = function(e) NULL)
+        if (!is.null(fit) && (is.null(bp) || fit$value < bp$value))
+          bp <- list(m = c(m1, m2), par = fit$par, value = fit$value, Dt = Dt2)
+      }
+      if (!is.null(bp) && cur$value - bp$value > 2 * kpen && bp$value < best$value - kpen) {
+        best <- bp
+        if (verbose) cat(sprintf("  pair step: %s\n", paste(bp$m, collapse = ",")))
+      }
+    }
     S <- c(S, best$m); Dt <- best$Dt
     full <- kse_optim(best$par, seq_along(best$par), S, Dt, y, gate)
     par <- full$par

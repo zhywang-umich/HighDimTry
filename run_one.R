@@ -2,7 +2,7 @@
 ## One replicate of the simulation study.
 ##
 ##   Rscript run_one.R seed=<id> [design=reg,cls] [n=100,200,400] [p=200,400,1000]
-##                     [methods=gated,orig] [out=results] [ntest=10000] [cls_cv=exp|misclass]
+##                     [methods=kse,kse_ard,gated,orig] [out=results] [ntest=10000] [cls_cv=exp|misclass]
 ##
 ## Every (design, n, p) combination is run for this seed; each method is saved to
 ##   <out>/<design>_n<n>_p<p>_seed<seed>_<method>.rds
@@ -23,7 +23,7 @@ source(file.path(here, "R", "kse.R"))
 ## ---- arguments -------------------------------------------------------------
 args <- commandArgs(TRUE)
 opt <- list(seed = Sys.getenv("SLURM_ARRAY_TASK_ID", "1"), design = "reg,cls",
-            n = "100,200,400", p = "200,400,1000", methods = "gated,orig",
+            n = "100,200,400", p = "200,400,1000", methods = "kse,kse_ard,gated",
             out = "results", ntest = "10000", cls_cv = "exp")
 for (a in args) {
   kv <- strsplit(a, "=", fixed = TRUE)[[1]]

@@ -22,7 +22,7 @@ for (a in args) {
   opt[[kv[1]]] <- kv[2]
 }
 dir.create(opt$out, showWarnings = FALSE, recursive = TRUE)
-TRUTH <- list(reg = 1:5, cls = 2:4)
+TRUTH <- list(reg = 1:5, cls = 2:4, int = 1:3)
 
 files <- list.files(opt$`in`, pattern = "\\.rds$", full.names = TRUE)
 if (!length(files)) stop("no .rds files in ", opt$`in`)

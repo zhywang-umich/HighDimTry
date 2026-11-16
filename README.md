@@ -9,7 +9,8 @@
 | 文件 | 内容 |
 |---|---|
 | `R/tpk.R` | 核心算法：带宽、高斯矩阵库、坐标子问题、α 步、交替坐标下降（原论文算法）、剖面 L-BFGS-B 工作集求解器（门控核）、交叉验证、refit |
-| `R/sim.R` | 论文第 3 节的两个模拟设定（回归、分类） |
+| `R/kse.R` | 新方法 KSE：REML + 得分检验 + EBIC 的核逐步选择 |
+| `R/sim.R` | 论文第 3 节的两个模拟设定（回归、分类）与纯交互设计 `int` |
 | `run_one.R` | 一次运行 = 一个 seed，跑完所选的全部 (design, n, p) 组合 |
 | `summarize.R` | 汇总所有 seed 的结果 |
 | `submit_array.sh` | SLURM array 脚本 |
@@ -17,15 +18,16 @@
 ## 运行
 
 ```bash
-# 单个 seed（默认：design=reg,cls；n=100,200,400；p=200,400,1000；methods=gated,orig）
+# 单个 seed（默认：design=reg,cls；n=100,200,400；p=200,400,1000；methods=kse,kse_ard,gated）
 Rscript run_one.R seed=17
 
 # 只跑部分设定或方法
 Rscript run_one.R seed=17 design=reg n=100 p=200 methods=gated
 
 # 服务器：两种方法分开提交（orig 慢得多），写到同一个 results/
-sbatch --array=1-300 submit_array.sh methods=gated
+sbatch --array=1-300 submit_array.sh methods=kse,kse_ard,gated
 sbatch --array=1-300 --time=48:00:00 submit_array.sh methods=orig
+sbatch --array=1-300 submit_array.sh design=int n=100,200 p=200,1000 methods=kse,kse_ard,gated
 
 # 汇总
 Rscript summarize.R in=results out=summary
@@ -34,6 +36,18 @@ Rscript summarize.R in=results out=summary
 - 每个 (design, n, p, seed, method) 存成 `results/<design>_n<n>_p<p>_seed<seed>_<method>.rds`；已存在的文件会跳过，作业被杀后直接重交即可。
 - 数据只由 (seed, design, n, p) 决定，不同方法可以分开提交、写到同一个目录，用的是同一份数据。
 - `seed` 缺省时取 `$SLURM_ARRAY_TASK_ID`。
+
+## 新方法 KSE（推荐）
+
+`methods=kse,kse_ard`。推导与试验见 [`docs/kse.md`](docs/kse.md)。
+
+- 核：$\prod_{m\in S}\{(1-\rho_m)+\rho_m\exp(-e^{u_m}d_m^2/2\sigma_m^2)\}$，门控 $\rho_m$ 与逐变量带宽 $u_m$ 都学习；`kse_ard` 固定 $\rho_m=1$。
+- 连续参数（门控、带宽、信号/噪声比、截距、噪声方差）用 GP 的 REML 估计，没有 $\gamma_1$、没有 $\ell_1$、没有交叉验证。
+- 支撑集：得分检验（一次 GEMM）筛选候选 → 候选重拟合 → 前向路径；纯交互用方差异质性统计量做变量对步；EBIC 选模型，再后向删除。
+- 每次运行输出 $\xi\in\{0,0.5,1\}$ 三行（`kse_xi0`、`kse_xi0.5`、`kse_xi1`），推荐 `kse_xi0.5`。
+- 额外设计 `design=int`：$Y=3X_1X_2+2\sin(1.5X_3)+\varepsilon$（无边际信号的纯交互）。
+
+试验摘要（10 个 seed）：回归 $n=200,p=400$ 时 `kse` 的测试 MSE 6.4、完全正确选择 8/10，`gated` 为 46.0（refit 22.8）；$n=400,p=1000$ 为 1.7 对 32.8；纯交互设计中 `kse` 10/10 完全正确，`gated` 3/10。分类上误分类率与 `gated` 相当，选出的变量少得多，但 TPR 较低。
 
 ## 方法（`methods=`）
 

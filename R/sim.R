@@ -29,7 +29,16 @@ sim_cls <- function(n, p) {
   list(X = X, y = ifelse(runif(n) < prob, 1, -1), f = prob)
 }
 
+## pure pairwise interaction (no marginal signal for X1, X2), independent X:
+## Y = 3 X1 X2 + 2 sin(1.5 X3) + eps
+sim_int <- function(n, p) {
+  X <- matrix(rnorm(n * p), n, p)
+  f <- 3 * X[, 1] * X[, 2] + 2 * sin(1.5 * X[, 3])
+  list(X = X, y = f + rnorm(n), f = f)
+}
+
 DESIGNS <- list(
   reg = list(sim = sim_reg, truth = 1:5, loss = "l2"),
-  cls = list(sim = sim_cls, truth = 2:4, loss = "exp")
+  cls = list(sim = sim_cls, truth = 2:4, loss = "exp"),
+  int = list(sim = sim_int, truth = 1:3, loss = "l2")
 )
