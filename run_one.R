@@ -18,6 +18,7 @@ get_script_dir <- function() {
 here <- get_script_dir()
 source(file.path(here, "R", "tpk.R"))
 source(file.path(here, "R", "sim.R"))
+source(file.path(here, "R", "kse.R"))
 
 ## ---- arguments -------------------------------------------------------------
 args <- commandArgs(TRUE)
@@ -42,7 +43,31 @@ GRID <- 2^seq(-15, 15, by = 2)          # paper: 2^-15, 2^-13, ..., 2^15
 DFMAX <- 30                             # gated: stop a gamma2 path beyond 30 active coordinates
 
 ## ---- one method ------------------------------------------------------------
+## KSE (R/kse.R): forward REML path + EBIC + backward elimination; one row per xi
+run_kse <- function(method, dat, test, des) {
+  p <- ncol(dat$X)
+  gate <- method == "kse"
+  t0 <- proc.time()[3]
+  fits <- kse_fit(dat$X, dat$y, gate = gate, xi = c(0, 0.5, 1))
+  tt <- proc.time()[3] - t0
+  lapply(names(fits), function(nm) {
+    md <- fits[[nm]]
+    S <- md$S
+    fhat <- md$predict(test$X)
+    k <- length(S)
+    pp <- kse_unpack(md$par, k, gate)
+    list(method = paste0(method, "_", nm), rule = nm, gamma1 = NA, gamma2 = NA,
+         support = S, t_support = pp$rho, u_support = pp$u, logphi = pp$logphi,
+         TPR = mean(des$truth %in% S), TNR = mean(!(setdiff(seq_len(p), des$truth) %in% S)),
+         nsel = k,
+         err = if (des$loss == "l2") mean((test$y - fhat)^2) else mean(ifelse(fhat >= 0, 1, -1) != test$y),
+         err_f = if (des$loss == "l2") mean((test$f - fhat)^2) else NA,
+         n_iter = NA, converged = TRUE, log10_maxK = 0, time_cv = 0, time_total = tt)
+  })
+}
+
 run_method <- function(method, dat, test, des, folds) {
+  if (method %in% c("kse", "kse_ard")) return(run_kse(method, dat, test, des))
   loss <- des$loss
   p <- ncol(dat$X)
   cfg <- switch(method,
@@ -126,7 +151,7 @@ for (k in seq_len(nrow(scen))) {
     for (ri in r) cat(sprintf("%s: TPR=%.2f TNR=%.3f nsel=%d err=%.3f (%.0fs)  ",
                               ri$method, ri$TPR, ri$TNR, ri$nsel, ri$err, ri$time_total))
     cat("\n")
-    cv <- attr(r, "cv"); attr(r, "cv") <- NULL
+    cv <- attr(r, "cv"); if (!is.null(cv)) attr(r, "cv") <- NULL
     saveRDS(list(design = d, n = n, p = p, seed = seed, bayes_err = bayes, results = r, cv = cv,
                  cls_cv = opt$cls_cv),
             files[[m]])
