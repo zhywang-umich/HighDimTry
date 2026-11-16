@@ -23,17 +23,16 @@ Rscript run_one.R seed=17
 # 只跑部分设定或方法
 Rscript run_one.R seed=17 design=reg n=100 p=200 methods=gated
 
-# 服务器
-sbatch --array=1-300 submit_array.sh
-sbatch --array=1-300 submit_array.sh methods=gated          # 只跑门控核
-sbatch --array=1-300 submit_array.sh methods=orig design=reg
+# 服务器：两种方法分开提交（orig 慢得多），写到同一个 results/
+sbatch --array=1-300 submit_array.sh methods=gated
+sbatch --array=1-300 --time=48:00:00 submit_array.sh methods=orig
 
 # 汇总
 Rscript summarize.R in=results out=summary
 ```
 
-- 每个 (design, n, p, seed) 存成 `results/<design>_n<n>_p<p>_seed<seed>.rds`；已存在的文件会跳过，作业被杀后直接重交即可。
-- 数据 seed 只由 (seed, design, n, p) 决定，所以 `methods=gated` 和 `methods=orig` 分开跑时用的是同一份数据。但同一个 (design, n, p, seed) 文件只写一次：分开跑不同方法时请用不同的 `out=` 目录，汇总时分别汇总或把文件合并后再汇总。
+- 每个 (design, n, p, seed, method) 存成 `results/<design>_n<n>_p<p>_seed<seed>_<method>.rds`；已存在的文件会跳过，作业被杀后直接重交即可。
+- 数据只由 (seed, design, n, p) 决定，不同方法可以分开提交、写到同一个目录，用的是同一份数据。
 - `seed` 缺省时取 `$SLURM_ARRAY_TASK_ID`。
 
 ## 方法（`methods=`）
@@ -69,11 +68,29 @@ Rscript summarize.R in=results out=summary
 3. **工作集 + 路径热启动 + `dfmax=30`。**
 4. 原论文核保持公开代码的算法，只用 GEMM 找出第一次扫描中需要更新的坐标。
 
+## 运行时间与资源（单线程，本仓库开发环境实测）
+
+每个 (design, n, p, method) 一次运行（含 16×16 网格 3 折 CV 与最终拟合）：
+
+| design | n | p | `gated` | `orig` |
+|---|---|---|---|---|
+| reg | 100 | 200 | 7–10 s | 176 s |
+| reg | 200 | 400 | 25–28 s | 585 s |
+| reg | 400 | 1000 | 221 s | ORIG_BIG_REG |
+| cls | 100 | 200 | 13–19 s | 15 s |
+| cls | 400 | 1000 | 260 s | ORIG_BIG_CLS |
+
+内存峰值约 1.5 GB（CV 阶段）；$n=400,p=1000$ 的最终拟合需要 1.28 GB 的高斯矩阵库，`submit_array.sh` 申请 6 GB。原论文核的耗时主要来自交替算法每个网格点都跑满 500 次迭代（每次一个 $n\times n$ Cholesky）。
+
 ## 测试中观察到的现象
 
-（以下为本仓库开发时的小规模测试，非 300 次模拟的结论。）
+（以下为开发时的小规模测试，不是 300 次模拟的结论。）
 
-- **原论文核 + 剖面求解器**：同一组 $(\gamma_1,\gamma_2)$ 下论文目标值从 48.6 降到 1.37，但测试 MSE 从 37 升到 103：$\lambda$ 增大把 $K$ 放大 $\prod(1+\lambda_m)$ 倍、岭惩罚失效而插值。原论文方法的结果依赖于交替算法在 500 次迭代处提前停止（多数网格点 `converged = FALSE`）。
-- **全维带宽**：公开代码的 $\sigma^2$ 是全维平方距离中位数（约 $2p$），每个坐标因子 $\kappa_m\in[0.975,1]$（$p=200$）。这正是有用变量的 $\lambda$ 被推到很大的原因之一：只有 $\lambda_m(1-\kappa_m)$ 足够大时该坐标才有作用。
-- **原论文核的分类**：没有公开代码，`orig` 的分类是按论文描述的重建（指数损失、类别平衡权、一步 Newton、单特征初值 $\lambda=1$）。在测试中它对 $(\gamma_1,\gamma_2)$ 极不稳定，多数网格点得到空模型；换成逐坐标带宽或收敛的 α 步都没有改善。比较分类结果时应注意这一点。
-- **门控核的小 $\rho$ 退化方向**：$\rho$ 都很小时 $K_\rho\approx J+\sum_m\rho_m(G_m-J)$ 近似可加，$(\rho,\alpha,\gamma_1,\gamma_2)\to(c\rho,\alpha/c,\gamma_1/c,c\gamma_2)$ 几乎不改变拟合，CV 最小误差可能选到小 $\gamma_1$、大 $\gamma_2$、许多 $\rho\approx0.01$ 的噪声变量。`gated_relax` 用 relaxed CV 处理这一点。
+- **小规模多 seed（reg，$n=100,p=200$，8 个 seed）**：`gated` 的 TPR 0.80、平均选出 12.9 个、测试 MSE 51；`gated_relax` 的 TPR 0.55、平均 5.8 个、TNR 0.985，`gated_relax_refit` 的 MSE 50。论文表 1 的原方法：TPR 0.57、5.5 个、RMSE 7.57（MSE 约 57）。
+- **$n=200,p=400$（reg）**：两个 seed 上 `gated` 选出全部 5 个真变量（另有 6–13 个噪声变量），`gated_relax` 选出 4 个和恰好 5 个，`gated_relax_refit` 的 MSE 为 17.3 和 5.6；同一数据上 `orig` 选出 3 个（TPR 0.6），MSE 42.9。
+- **$n=400,p=1000$（reg）**：`gated` 恰好选出 X1–X5，`gated_refit` 的 MSE 为 10.2。
+- **分类 CV 准则**：$n=100,p=200$ 的 8 个 seed 上，误分类率准则下 `gated` 的 TPR 0.46、平均 8 个、误分类 0.368；指数损失准则下 TPR 0.50、平均 4.8 个、误分类 0.323（Bayes 误差约 0.27）。默认用指数损失。分类中 X4 单独即可达到约 0.31 的误分类率（与 X2、X3 相关），X2+X3 的模型约 0.28，CV 常在两者之间摇摆。
+- **原论文核 + 剖面求解器**：同一组 $(\gamma_1,\gamma_2)$ 下论文目标值从 48.6 降到 1.37，但测试 MSE 从 37 升到 103：$\lambda$ 增大把 $K$ 放大 $\prod(1+\lambda_m)$ 倍、岭惩罚失效而插值。原论文方法的结果依赖于交替算法在 500 次迭代处停止（多数网格点 `converged = FALSE`）。
+- **全维带宽**：公开代码的 $\sigma^2$ 是全维平方距离中位数（约 $2p$），每个坐标因子 $\kappa_m\in[0.975,1]$（$p=200$）。有用变量的 $\lambda$ 必须很大，$\lambda_m(1-\kappa_m)$ 才有量级。
+- **原论文核的分类**：没有公开代码，`orig` 的分类是按论文描述的重建（指数损失、类别平衡权、一步 Newton、单特征初值 $\lambda=1$）。它对 $(\gamma_1,\gamma_2)$ 极不稳定，多数网格点得到空模型；换成逐坐标带宽或收敛的 α 步都没有改善。比较分类结果时应注意这一点。
+- **门控核的小 $\rho$ 退化方向**：$\rho$ 都很小时 $K_\rho\approx J+\sum_m\rho_m(G_m-J)$ 近似可加，$(\rho,\alpha,\gamma_1,\gamma_2)\to(c\rho,\alpha/c,\gamma_1/c,c\gamma_2)$ 几乎不改变拟合，按门控核拟合本身调参会选到小 $\gamma_1$、大 $\gamma_2$、许多 $\rho\approx0.01$ 的噪声变量（真阳性 $\rho$ 中位数约 0.18，假阳性约 0.015）。`gated_relax` 用 relaxed CV 处理这一点。

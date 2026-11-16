@@ -4,9 +4,10 @@
 ##   Rscript run_one.R seed=<id> [design=reg,cls] [n=100,200,400] [p=200,400,1000]
 ##                     [methods=gated,orig] [out=results] [ntest=10000] [cls_cv=exp|misclass]
 ##
-## Every (design, n, p) combination is run for this seed and saved to
-##   <out>/<design>_n<n>_p<p>_seed<seed>.rds
-## Existing files are skipped, so a killed job can simply be resubmitted.
+## Every (design, n, p) combination is run for this seed; each method is saved to
+##   <out>/<design>_n<n>_p<p>_seed<seed>_<method>.rds
+## Existing files are skipped, so a killed job can simply be resubmitted, and methods can be
+## run in separate jobs into the same directory (the data depend only on seed, design, n, p).
 ## With SLURM: seed defaults to $SLURM_ARRAY_TASK_ID.
 
 get_script_dir <- function() {
@@ -106,27 +107,28 @@ run_method <- function(method, dat, test, des, folds) {
 scen <- expand.grid(p = ps, n = ns, design = designs, stringsAsFactors = FALSE)
 for (k in seq_len(nrow(scen))) {
   d <- scen$design[k]; n <- scen$n[k]; p <- scen$p[k]
-  file <- file.path(opt$out, sprintf("%s_n%d_p%d_seed%d.rds", d, n, p, seed))
-  if (file.exists(file)) { cat("skip", file, "\n"); next }
+  files <- setNames(file.path(opt$out, sprintf("%s_n%d_p%d_seed%d_%s.rds", d, n, p, seed, methods)),
+                    methods)
+  todo <- methods[!file.exists(files)]
+  for (m in setdiff(methods, todo)) cat("skip", files[[m]], "\n")
+  if (!length(todo)) next
   des <- DESIGNS[[d]]
-  ## data seed depends on (seed, design, n, p) only, so methods can be run separately
-  sid <- (seed * 1000L + match(d, names(DESIGNS)) * 100L + match(n, c(100, 200, 400)) * 10L +
-          match(p, c(200, 400, 1000))) %% .Machine$integer.max
+  ## data seed depends on (seed, design, n, p) only: every method sees the same data
+  sid <- (seed * 100003 + match(d, names(DESIGNS)) * 7919 + n * 31 + p) %% 2147483647
   set.seed(sid)
   dat <- des$sim(n, p)
   test <- des$sim(ntest, p)
   folds <- sample(rep(1:3, length.out = n))
   bayes <- if (d == "cls") mean(ifelse(test$f > 0.5, 1, -1) != test$y) else mean((test$y - test$f)^2)
-  rows <- list(); cvs <- list()
-  for (m in methods) {
+  for (m in todo) {
     cat(sprintf("[%s] %s n=%d p=%d seed=%d method=%s ... ", format(Sys.time(), "%H:%M:%S"), d, n, p, seed, m))
     r <- run_method(m, dat, test, des, folds)
     for (ri in r) cat(sprintf("%s: TPR=%.2f TNR=%.3f nsel=%d err=%.3f (%.0fs)  ",
                               ri$method, ri$TPR, ri$TNR, ri$nsel, ri$err, ri$time_total))
     cat("\n")
-    cvs[[m]] <- attr(r, "cv")
-    rows <- c(rows, r)
+    cv <- attr(r, "cv"); attr(r, "cv") <- NULL
+    saveRDS(list(design = d, n = n, p = p, seed = seed, bayes_err = bayes, results = r, cv = cv,
+                 cls_cv = opt$cls_cv),
+            files[[m]])
   }
-  saveRDS(list(design = d, n = n, p = p, seed = seed, bayes_err = bayes, results = rows, cv = cvs),
-          file)
 }
